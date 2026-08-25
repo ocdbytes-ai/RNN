@@ -1,8 +1,9 @@
-# Sequences 
+# Sequences
 
-This repository focuses upon sequences and RNNs.
+This repository focuses upon sequences in RNNs and Language Model.
 
-## Notebooks 
+## Notebooks
 
-- [./notebooks/sequences.ipynb](Sequences Introduction and Concepts)
-- [./notebooks/raw_to_sequence_data.ipynb](Raw to Sequenced Data)
+- [Sequences Introduction and Concepts](./notebooks/sequences.ipynb)
+- [Raw to Sequenced Data](./notebooks/raw_to_sequence_data.ipynb)
+- [Language Model](./notebooks/language_model.ipynb)
