@@ -1,7 +1,11 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import pairwise
+from typing import cast
 
 import torch
 from torch import nn
+from typing_extensions import override
 
 
 @dataclass
@@ -33,13 +37,14 @@ class LSTMStates:
 class LSTM(nn.Module):
     def __init__(self, inputs: LSTMInputs):
         super().__init__()
-        self.input_size = inputs.input_size
-        self.hidden_size = inputs.hidden_size
+        self.input_size: int = inputs.input_size
+        self.hidden_size: int = inputs.hidden_size
         gates_size = 4 * inputs.hidden_size
-        self.W = nn.Parameter(torch.randn(inputs.input_size, gates_size) * inputs.sigma)
-        self.W_h = nn.Parameter(torch.randn(inputs.hidden_size, gates_size) * inputs.sigma)
-        self.b = nn.Parameter(torch.zeros(gates_size))
+        self.W: nn.Parameter = nn.Parameter(torch.randn(inputs.input_size, gates_size) * inputs.sigma)
+        self.W_h: nn.Parameter = nn.Parameter(torch.randn(inputs.hidden_size, gates_size) * inputs.sigma)
+        self.b: nn.Parameter = nn.Parameter(torch.zeros(gates_size))
 
+    @override
     def forward(self, X: torch.Tensor, states: LSTMStates | None = None) -> tuple[torch.Tensor, LSTMStates]:
         """
         Forward pass through the LSTM cell.
@@ -56,13 +61,13 @@ class LSTM(nn.Module):
 
         if states is None:
             # Initialize cell state and hidden state to zeros if not provided
-            C = X.new_zeros((batch_size, self.hidden_size))
-            H = X.new_zeros((batch_size, self.hidden_size))
+            c = X.new_zeros((batch_size, self.hidden_size))
+            h = X.new_zeros((batch_size, self.hidden_size))
         else:
-            C, H = states.C, states.H
+            c, h = states.C, states.H
 
         # Hidden states for the sequences
-        outputs = []
+        outputs: list[torch.Tensor] = []
         
         for t in range(sequence_length):
             x_t = X[:, t, :]  # Get the input at time step t
@@ -74,42 +79,43 @@ class LSTM(nn.Module):
             # o_t = torch.sigmoid(x_t @ self.W_o + H @ self.W_h_o + self.b_o)
 
             # Compute all four gates with two matrix multiplications.
-            i_t, f_t, g_t, o_t = (x_t @ self.W + H @ self.W_h + self.b).chunk(4, dim=1)
+            i_t, f_t, g_t, o_t = (x_t @ self.W + h @ self.W_h + self.b).chunk(4, dim=1)
             i_t = torch.sigmoid(i_t)
             f_t = torch.sigmoid(f_t)
             g_t = torch.tanh(g_t)
             o_t = torch.sigmoid(o_t)
 
             # Update cell state
-            C = f_t * C + i_t * g_t
+            c = f_t * c + i_t * g_t
             # Update hidden state
-            H = o_t * torch.tanh(C)
+            h = o_t * torch.tanh(c)
 
-            outputs.append(H)
+            outputs.append(h)
 
         # This is for the corpus format I am using
         output_tensor = torch.stack(outputs, dim=1)  # Stack outputs along the sequence dimension
-        new_states = LSTMStates(C=C, H=H)  # Create new states object
+        new_states = LSTMStates(C=c, H=h)  # Create new states object
 
         return output_tensor, new_states
 
 class LSTMMultiLayer(nn.Module):
     def __init__(self, lstms: list[LSTM]):
         super().__init__()
-        self.layers = nn.ModuleList(lstms)
-        self.validate_layers()
+        self.validate_layers(lstms)
+        self.layers: nn.ModuleList = nn.ModuleList(lstms)
 
-    def validate_layers(self) -> None:
-        for previous, current in zip(self.layers, self.layers[1:]):
+    @staticmethod
+    def validate_layers(lstms: list[LSTM]) -> None:
+        for previous, current in pairwise(lstms):
             if current.input_size != previous.hidden_size:
                 raise ValueError(
-                    "Each layer's input_size must equal the previous "
-                    "layer's hidden_size"
+                    "Each layer's input_size must equal the previous layer's hidden_size"
                 )
 
+    @override
     def forward(
         self,
-        X: torch.Tensor,
+        x: torch.Tensor,
         states: list[LSTMStates | None] | None = None,
     ) -> tuple[torch.Tensor, list[LSTMStates]]:
         """
@@ -123,14 +129,15 @@ class LSTMMultiLayer(nn.Module):
             output: Output tensor of shape (batch_size, sequence_length, hidden_size[layer_last])
             new_states: List of updated LSTMStates for each layer
         """
-        if states is None:
-            states = [None] * len(self.layers)
-        elif len(states) != len(self.layers):
+        layer_states: list[LSTMStates | None] = (
+            states if states is not None else [None] * len(self.layers)
+        )
+        if len(layer_states) != len(self.layers):
             raise ValueError("One state is required for each LSTM layer")
 
-        new_states = []
-        for layer, state in zip(self.layers, states):
-            X, new_state = layer(X, state)
+        new_states: list[LSTMStates] = []
+        for layer, state in zip(cast(Iterable[LSTM], self.layers), layer_states):
+            x, new_state = cast(tuple[torch.Tensor, LSTMStates], layer(x, state))
             new_states.append(new_state)
 
-        return X, new_states
+        return x, new_states

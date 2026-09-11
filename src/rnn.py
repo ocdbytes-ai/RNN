@@ -1,7 +1,11 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import pairwise
+from typing import cast
 
 import torch
 from torch import nn
+from typing_extensions import override
 
 
 @dataclass
@@ -13,17 +17,18 @@ class RNNInputs:
 class RNN(nn.Module):
     def __init__(self, rnn_inputs: RNNInputs):
         super().__init__()
-        self.rnn_inputs = rnn_inputs
-        self.W = nn.Parameter(
+        self.rnn_inputs: RNNInputs = rnn_inputs
+        self.W: nn.Parameter = nn.Parameter(
             torch.randn(rnn_inputs.embedding_size, rnn_inputs.hidden_layer_size) * rnn_inputs.sigma
         )
-        self.W_h = nn.Parameter(
+        self.W_h: nn.Parameter = nn.Parameter(
             torch.randn(rnn_inputs.hidden_layer_size, rnn_inputs.hidden_layer_size) * rnn_inputs.sigma
         )
-        self.b = nn.Parameter(
+        self.b: nn.Parameter = nn.Parameter(
             torch.zeros(rnn_inputs.hidden_layer_size)
         )
 
+    @override
     def forward(
         self,
         X: torch.Tensor,
@@ -38,7 +43,7 @@ class RNN(nn.Module):
             )
 
         # outputs : (sequence_length, batch_size, hidden_layer_size)
-        outputs = []
+        outputs: list[torch.Tensor] = []
         # For looping over the sequences (dimension 1) because of the X shape (batch_size, sequence_length, embedding_size)
         for x in X.unbind(dim=1):
             # x: (batch_size, embedding_size)
@@ -56,44 +61,46 @@ class RNN(nn.Module):
 class RNNMultiLayer(nn.Module):
     def __init__(self, rnns: list[RNN]):
            super().__init__()
-           self.layers = nn.ModuleList(rnns)
-           self.validate_layers()
+           self.validate_layers(rnns)
+           self.layers: nn.ModuleList = nn.ModuleList(rnns)
 
-    def validate_layers(self) -> None:
-           for previous, current in zip(self.layers, self.layers[1:]):
+    @staticmethod
+    def validate_layers(rnns: list[RNN]) -> None:
+           for previous, current in pairwise(rnns):
                if (
                    current.rnn_inputs.embedding_size
                    != previous.rnn_inputs.hidden_layer_size
                ):
                    raise ValueError(
-                       "Each layer's embedding_size must equal the previous "
-                       "layer's hidden_layer_size"
+                       "Each layer's embedding_size must equal the previous layer's hidden_layer_size"
                    )
 
+    @override
     def forward(
            self,
-           X: torch.Tensor,
+           x: torch.Tensor,
            states: list[torch.Tensor | None] | None = None,
        ) -> tuple[torch.Tensor, list[torch.Tensor]]:
-            # X: (batch_size, sequence_length, embedding_size)
-            if states is None:
-               states = [None] * len(self.layers)
-            elif len(states) != len(self.layers):
+            # x: (batch_size, sequence_length, embedding_size)
+            layer_states: list[torch.Tensor | None] = (
+                states if states is not None else [None] * len(self.layers)
+            )
+            if len(layer_states) != len(self.layers):
                raise ValueError("One state is required for each RNN layer")
 
             # final_states : (num_layers, batch_size, hidden_layer_size[layer_i])
-            final_states = []
+            final_states: list[torch.Tensor] = []
 
             # Iter over each layer with corresponding state
-            # the input to the next layer is the states 
+            # the input to the next layer is the states
             # collected for each sequence step
-            for layer, state in zip(self.layers, states):
-               X, state = layer(X, state)
+            for layer, state in zip(cast(Iterable[RNN], self.layers), layer_states):
+               x, state = cast(tuple[torch.Tensor, torch.Tensor], layer(x, state))
                final_states.append(state)
 
             # final_states is the last state calculated in the last
             # data sequence
-            # shape : 
-            # (batch_size, sequence_length, last_layer.hidden_layer_size), 
+            # shape :
+            # (batch_size, sequence_length, last_layer.hidden_layer_size),
             # (num_layers, batch_size, hidden_layer_size[layer_i])
-            return X, final_states
+            return x, final_states
